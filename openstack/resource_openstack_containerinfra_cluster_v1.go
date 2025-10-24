@@ -456,10 +456,9 @@ func resourceContainerInfraClusterV1Update(ctx context.Context, d *schema.Resour
 	}
 
 	updateOpts := []clusters.UpdateOptsBuilder{}
+	nodeCount := d.Get("node_count").(int)
 
 	if d.HasChange("node_count") {
-		nodeCount := d.Get("node_count").(int)
-
 		if nodeCount == 0 {
 			containerInfraClient.Microversion = containerInfraV1ZeroNodeCountMicroversion
 		}
@@ -475,16 +474,28 @@ func resourceContainerInfraClusterV1Update(ctx context.Context, d *schema.Resour
 		log.Printf(
 			"[DEBUG] Updating openstack_containerinfra_cluster_v1 %s with options: %#v", d.Id(), updateOpts)
 
-		_, err = clusters.Update(ctx, containerInfraClient, d.Id(), updateOpts).Extract()
-		if err != nil {
-			return diag.Errorf("Error updating openstack_containerinfra_cluster_v1 %s: %s", d.Id(), err)
+		if strings.HasPrefix(d.Get("stack_id").(string), "kube") {
+			log.Printf(
+				"[DEBUG] Magnum stack is from capi %s", d.Id())
+
+			containerInfraClient.Microversion = containerInfraV1ClusterUpgradeMinMicroversion
+
+			clusters.Resize(ctx, containerInfraClient, d.Id(), clusters.ResizeOpts{
+				NodeCount: &nodeCount,
+			})
+		} else {
+			_, err = clusters.Update(ctx, containerInfraClient, d.Id(), updateOpts).Extract()
+			if err != nil {
+				return diag.Errorf("Error updating openstack_containerinfra_cluster_v1 %s: %s", d.Id(), err)
+			}
+
 		}
 
 		stateConf := &retry.StateChangeConf{
 			Target:       []string{"UPDATE_COMPLETE"},
 			Refresh:      containerInfraClusterV1StateRefreshFunc(ctx, containerInfraClient, d.Id()),
 			Timeout:      d.Timeout(schema.TimeoutUpdate),
-			Delay:        0,
+			Delay:        5 * time.Second,
 			PollInterval: 20 * time.Second,
 		}
 
